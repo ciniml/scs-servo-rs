@@ -1,0 +1,5 @@
+[workspace]
+
+members = [
+    "scs-servo", "scs-servo-cli",
+]
