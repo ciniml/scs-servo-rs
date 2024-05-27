@@ -224,6 +224,12 @@ impl<const SIZE: usize> WriteRegisterCommand<SIZE> {
         }
         Self { raw }
     }
+    pub fn len(&self) -> usize {
+        self.reader().length_unchecked() as usize + 4
+    }
+    pub fn packet(&self) -> &[u8] {
+        &self.raw[..self.len()]
+    }
     pub fn reader(&self) -> PacketReader {
         PacketReader::new(&self.raw[2..])
     }
@@ -290,7 +296,7 @@ impl<const BUFFER_SIZE: usize> ProtocolMaster<BUFFER_SIZE> {
     }
 
     pub fn write_register<R: StreamReader, W: StreamWriter, Timeout: FnMut() -> bool, const SIZE: usize>(&mut self, reader: &mut R, writer: &mut W, command: &WriteRegisterCommand<SIZE>, mut timeout: Timeout) -> Result<(), ProtocolHandlerError<R::Error, W::Error>> {
-        let buffer = &command.raw[..];
+        let buffer = command.packet();
         let mut total_bytes_written = 0;
         while total_bytes_written < buffer.len() {
             match writer.write(&buffer[total_bytes_written..]) {
