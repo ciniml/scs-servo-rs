@@ -89,7 +89,9 @@ impl<'a> scs_servo::protocol::StreamWriter for SerialWriter<'a> {
 }
 
 fn main() {
-    env_logger::init();
+    env_logger::builder()
+        .filter_level(log::LevelFilter::Info)
+        .init();
     let cli = Cli::parse();
 
     let serial = serialport::new(&cli.port, cli.baud)
@@ -186,6 +188,11 @@ fn main() {
                     buffer
                 },
                 Format::Hex => {
+                    let last_non_space = buffer.iter().rev().enumerate().find(|(_, &b)| b != b'\r' && b != b'\n' && b != b' ');
+                    let buffer = match last_non_space {
+                        Some((i, _)) => &buffer[..buffer.len() - i],
+                        None => &buffer,
+                    };
                     hex::decode(&buffer).expect("Failed to decode hex")
                 }
             };
