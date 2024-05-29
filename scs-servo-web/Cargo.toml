@@ -1,0 +1,38 @@
+[package]
+name = "scs-servo-web"
+version = "0.1.0"
+authors = ["Kenta IDA <fuga@fugafuga.org>"]
+edition = "2018"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+wasm-bindgen = "0.2.84"
+
+# The `console_error_panic_hook` crate provides better debugging of panics by
+# logging them with `console.error`. This is great for development, but requires
+# all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
+# code size when deploying.
+console_error_panic_hook = { version = "0.1.7", optional = true }
+scs-servo = { path = "../scs-servo", features = ["async"] }
+web-sys = { version = "0.3.69", features = ["Serial", "Window", "SerialPort", "SerialOptions", "Navigator", "ReadableStream", "WritableStream", "WritableStreamDefaultWriter"] }
+wasm-bindgen-futures = "0.4.42"
+wasm-streams = "0.4.0"
+futures = "0.3.30"
+nb = "1.1.0"
+js-sys = "0.3.69"
+wasm-logger = "0.2.0"
+log = "0.4.21"
+web-time = "1.1.0"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.34"
+
+[profile.release]
+# Tell `rustc` to optimize for small code size.
+opt-level = "s"

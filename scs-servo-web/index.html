@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8" />
+    <title>SCS Servo ID configurator</title>
+  </head>
+  <body>
+    <script type="module">
+      import init, { start, scan_servo as scanServo, change_servo_id as changeServoId, JsProtocolMasterConfig as ProtocolMasterConfig } from "./pkg/scs_servo_web.js";
+      await init();
+      start();
+
+      const errorMessageField = document.querySelector('#error_message');
+      function showError(message) {
+        errorMessageField.textContent = message;
+      }
+      function clearError() {
+        errorMessageField.textContent = '';
+      }
+      const resultMessageField = document.querySelector('#result_message');
+      function showResult(message) {
+        resultMessageField.textContent = message;
+      }
+      function clearResult() {
+        resultMessageField.textContent = '';
+      }
+      const baudRateField = document.querySelector('#baud_rate');
+      const echoBackField = document.querySelector('#echo_back');
+
+      function getMasterConfig() {
+        const config = new ProtocolMasterConfig(echoBackField.checked);
+        return config;
+      }
+
+      const selectSerialButton = document.querySelector('#select_serial');
+      let port = undefined;
+      async function openPort() {
+        if( port ){
+          try {
+            await port.close();
+          }
+          catch(e) {
+          }
+          const baudRate = parseInt(baudRateField.value);
+          await port.open({ baudRate: baudRate });
+        }
+      }
+      selectSerialButton.addEventListener('click', async () => {
+        port = await navigator.serial.requestPort();
+        selectSerialButton.disabled = true;
+      });
+      const scanServoButton = document.querySelector('#scan_servo');
+      scanServoButton.addEventListener('click', async () => {
+        try {
+          clearError();
+          scanServoButton.disabled = true;
+          scanServoButton.textContent = 'Scanning...';
+          if (port) {
+            await openPort();
+            const scanningId = document.querySelector('#scanning_id');
+            const ids = await scanServo(port, getMasterConfig(), (id) => {
+              scanningId.textContent = `${id}`;
+            });
+            scanningId.textContent = '';
+            const foundIds = document.querySelector('#found_ids');
+            foundIds.textContent = ids.join(', ');
+          }
+        }
+        catch(e) {
+          showError(e);
+        }
+        finally {
+          scanServoButton.textContent = 'Scan Servo';
+          scanServoButton.disabled = false;
+        }
+      });
+      const setServoIdButton = document.querySelector('#set_servo_id');
+      setServoIdButton.addEventListener('click', async () => {
+        if (port) {
+          try {
+            clearError();
+            clearResult();
+            setServoIdButton.disabled = true;
+            await openPort();
+            const servoId = document.querySelector('#servo_id').value;
+            const newServoId = document.querySelector('#new_servo_id').value;
+            await changeServoId(port, getMasterConfig(), parseInt(servoId), parseInt(newServoId));
+            showResult(`Servo ID changed from ${servoId} to ${newServoId}`);
+          }
+          catch(e) {
+            showError(e);
+          }
+          finally {
+            setServoIdButton.disabled = false;
+          }
+        }
+      });
+    </script>
+
+    <div>
+      <button id="select_serial">Select Serial Port</button>
+      <span>Baud rate:</span><input type="number" id="baud_rate" value="1000000" min="9600" max="1000000" />
+      <input type="checkbox" id="echo_back" checked/><span>Use adapter with echo back. (e.g. TX-RX resistor configuration)</span>
+    </div>
+    <div>
+      <button id="scan_servo">Scan Servo</button>
+      <span>Scanning ID: </span><span id="scanning_id"></span>
+      <span>Found IDs: </span><span id="found_ids"></span>
+    </div>
+    <span>Target Servo ID</span><input type="number" id="servo_id" min="1" max="253" />
+    <div>
+      <span>Set servo ID to </span><input type="number" id="new_servo_id" min="1" max="253" />
+      <button id="set_servo_id">Set Servo ID</button>
+    </div>
+    <div id="result_message" style="color: green"></div>
+    <div id="error_message" style="color: red"></div>
+  </body>
+</html>

@@ -5,9 +5,21 @@ pub trait StreamReader {
     fn read(&mut self, data: &mut [u8]) -> nb::Result<usize, Self::Error>;
 }
 
+#[cfg(feature = "async")]
+pub trait StreamReaderAsync {
+    type Error;
+    fn read(&mut self, data: &mut [u8]) -> impl core::future::Future<Output = Result<usize, Self::Error>>;
+}
+
 pub trait StreamWriter {
     type Error;
     fn write(&mut self, data: &[u8]) -> nb::Result<usize, Self::Error>;
+}
+
+#[cfg(feature = "async")]
+pub trait StreamWriterAsync {
+    type Error;
+    fn write(&mut self, data: &[u8]) -> impl core::future::Future<Output = Result<usize, Self::Error>>;
 }
 
 pub struct ProtocolReader<const BUFFER_SIZE: usize> {
@@ -45,6 +57,77 @@ impl<const BUFFER_SIZE: usize> ProtocolReader<BUFFER_SIZE> {
             position: 0,
             state: ReaderState::Marker1,
         }
+    }
+
+    #[cfg(feature = "async")]
+    async fn read_inner_async<R: StreamReaderAsync>(&mut self, reader: &mut R) -> Result<(bool, bool), ProtocolReaderError<R::Error>> {
+        let (new_state, position, fully_read) = match self.state {
+            ReaderState::Marker1 | ReaderState::Completed => {
+                let bytes_read = reader.read(&mut self.buffer[0..2]).await
+                    .map_err(|err| ProtocolReaderError::ReaderError(err))?;
+                let new_state = if bytes_read == 1 && self.buffer[0] == 0xff {
+                    ReaderState::Marker2
+                } else if bytes_read == 2 {
+                    if self.buffer[0] == 0xff {
+                        if self.buffer[1] == 0xff {
+                            ReaderState::Header
+                        } else {
+                            ReaderState::Marker2
+                        }
+                    } else if self.buffer[1] == 0xff {
+                        ReaderState::Marker2
+                    } else {
+                        ReaderState::Marker1
+                    }
+                } else {
+                    ReaderState::Marker1
+                };
+                (new_state, 0, bytes_read == 2)
+            }
+            ReaderState::Marker2 => {
+                let bytes_read = reader.read(&mut self.buffer[0..1]).await
+                    .map_err(|err| ProtocolReaderError::ReaderError(err))?;
+                let new_state = if bytes_read == 1 && self.buffer[0] == 0xff {
+                    ReaderState::Header
+                } else {
+                    ReaderState::Marker1
+                };
+                (new_state, 0, bytes_read == 1)
+            }
+            ReaderState::Header => {
+                let bytes_read = reader.read(&mut self.buffer[self.position..2]).await
+                    .map_err(|err| ProtocolReaderError::ReaderError(err))?;
+                let new_position = self.position + bytes_read;
+                let new_state = if new_position == 2 {
+                    let length = self.buffer[1] as usize;
+                    if length + 2 > BUFFER_SIZE {
+                        return Err(ProtocolReaderError::InsufficientBuffer);
+                    } else {
+                        ReaderState::Data
+                    }
+                } else {
+                    ReaderState::Header
+                };
+                (new_state, new_position, bytes_read == 2)
+            }
+            ReaderState::Data => {
+                let length = self.buffer[1] as usize;
+                let end = length + 2;
+                let bytes_to_read = end - self.position;
+                let bytes_read = reader.read(&mut self.buffer[self.position..end]).await
+                    .map_err(|err| ProtocolReaderError::ReaderError(err))?;
+                let new_position = self.position + bytes_read;
+                let new_state = if new_position == end {
+                    ReaderState::Completed
+                } else {
+                    ReaderState::Data
+                };
+                (new_state, new_position, bytes_read == bytes_to_read)
+            }
+        };
+        self.state = new_state;
+        self.position = position;
+        Ok((self.state == ReaderState::Completed, fully_read))
     }
 
     fn read_inner<R: StreamReader>(&mut self, reader: &mut R) -> Result<(bool, bool), ProtocolReaderError<R::Error>> {
@@ -132,6 +215,18 @@ impl<const BUFFER_SIZE: usize> ProtocolReader<BUFFER_SIZE> {
     pub fn read<R: StreamReader>(&mut self, reader: &mut R) -> Result<bool, ProtocolReaderError<R::Error>> {
         loop {
             let (completed, fully_read) = self.read_inner(reader)?;
+            if completed {
+                return Ok(true);
+            } else if !fully_read {
+                return Ok(false);
+            }
+        }
+    }
+
+    #[cfg(feature = "async")]
+    pub async fn read_async<R: StreamReaderAsync>(&mut self, reader: &mut R) -> Result<bool, ProtocolReaderError<R::Error>> {
+        loop {
+            let (completed, fully_read) = self.read_inner_async(reader).await?;
             if completed {
                 return Ok(true);
             } else if !fully_read {
@@ -295,6 +390,50 @@ impl<const BUFFER_SIZE: usize> ProtocolMaster<BUFFER_SIZE> {
         Ok(())
     }
 
+    #[cfg(feature = "async")]
+    pub async fn read_register_async<R: StreamReaderAsync, W: StreamWriterAsync, Timeout: FnMut() -> bool>(&mut self, reader: &mut R, writer: &mut W, id: u8, address: u8, buffer: &mut [u8], mut timeout: Timeout) -> Result<(), ProtocolHandlerError<R::Error, W::Error>> {
+        let command = ReadRegisterCommand::new(id, address, buffer.len() as u8);
+        let mut total_bytes_written = 0;
+        while total_bytes_written < command.raw.len() {
+            let bytes_written = writer.write(&command.raw[total_bytes_written..]).await
+                .map_err(|err| ProtocolHandlerError::WriterError(err))?;
+            total_bytes_written += bytes_written;
+            if bytes_written == 0 && timeout() {
+                return Err(ProtocolHandlerError::TimedOut);
+            }
+        }
+
+        if self.config.echo_back {
+            // Discard echo backed packet.
+            while !self.reader.read_async(reader).await
+                .map_err(|err| ProtocolHandlerError::ProtocolReaderError(err))? {
+                if timeout() {
+                    return Err(ProtocolHandlerError::TimedOut);
+                }
+            }
+        }
+
+        while !self.reader.read_async(reader).await
+            .map_err(|err| ProtocolHandlerError::ProtocolReaderError(err))? {
+            if timeout() {
+                return Err(ProtocolHandlerError::TimedOut);
+            }
+        }
+
+        let packet = self.reader.packet().unwrap();
+        packet.verify_checksum().map_err(|err| ProtocolHandlerError::PacketError(err))?;
+        let response_id = packet.id().map_err(|err| ProtocolHandlerError::PacketError(err))?;
+        if response_id != id {
+            return Err(ProtocolHandlerError::UnexpectedPacketId(response_id));
+        }
+        let data = packet.data().map_err(|err| ProtocolHandlerError::PacketError(err))?;
+        if data.len() != buffer.len() + 1 {
+            return Err(ProtocolHandlerError::UnexpectedLength(data.len()));
+        }
+        buffer.copy_from_slice(&data[1..]);
+        Ok(())
+    }
+
     pub fn write_register<R: StreamReader, W: StreamWriter, Timeout: FnMut() -> bool, const SIZE: usize>(&mut self, reader: &mut R, writer: &mut W, command: &WriteRegisterCommand<SIZE>, mut timeout: Timeout) -> Result<(), ProtocolHandlerError<R::Error, W::Error>> {
         let buffer = command.packet();
         let mut total_bytes_written = 0;
@@ -325,6 +464,46 @@ impl<const BUFFER_SIZE: usize> ProtocolMaster<BUFFER_SIZE> {
         }
 
         while !self.reader.read(reader)? {
+            if timeout() {
+                return Err(ProtocolHandlerError::TimedOut);
+            }
+        }
+
+        let packet = self.reader.packet().unwrap();
+        packet.verify_checksum().map_err(|err| ProtocolHandlerError::PacketError(err))?;
+        let response_id = packet.id().map_err(|err| ProtocolHandlerError::PacketError(err))?;
+        if response_id != command.reader().id().unwrap() {
+            return Err(ProtocolHandlerError::UnexpectedPacketId(response_id));
+        }
+        // TODO: Check the write response.
+        Ok(())
+    }
+
+    #[cfg(feature = "async")]
+    pub async fn write_register_async<R: StreamReaderAsync, W: StreamWriterAsync, Timeout: FnMut() -> bool, const SIZE: usize>(&mut self, reader: &mut R, writer: &mut W, command: &WriteRegisterCommand<SIZE>, mut timeout: Timeout) -> Result<(), ProtocolHandlerError<R::Error, W::Error>> {
+        let buffer = command.packet();
+        let mut total_bytes_written = 0;
+        while total_bytes_written < buffer.len() {
+            let bytes_written = writer.write(&buffer[total_bytes_written..]).await
+                .map_err(|err| ProtocolHandlerError::WriterError(err))?;
+            total_bytes_written += bytes_written;
+            if bytes_written == 0 && timeout() {
+                return Err(ProtocolHandlerError::TimedOut);
+            }
+        }
+
+        if self.config.echo_back {
+            // Discard echo backed packet.
+            while !self.reader.read_async(reader).await
+                .map_err(|err| ProtocolHandlerError::ProtocolReaderError(err))? {
+                if timeout() {
+                    return Err(ProtocolHandlerError::TimedOut);
+                }
+            }
+        }
+
+        while !self.reader.read_async(reader).await
+            .map_err(|err| ProtocolHandlerError::ProtocolReaderError(err))? {
             if timeout() {
                 return Err(ProtocolHandlerError::TimedOut);
             }

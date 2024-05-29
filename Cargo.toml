@@ -1,5 +1,5 @@
 [workspace]
 
 members = [
-    "scs-servo", "scs-servo-cli",
+    "scs-servo", "scs-servo-cli", "scs-servo-web"
 ]

@@ -1,0 +1,17 @@
+{
+  "name": "scs-servo-web",
+  "collaborators": [
+    "Kenta IDA <fuga@fugafuga.org>"
+  ],
+  "version": "0.1.0",
+  "files": [
+    "scs_servo_web_bg.wasm",
+    "scs_servo_web.js",
+    "scs_servo_web.d.ts"
+  ],
+  "module": "scs_servo_web.js",
+  "types": "scs_servo_web.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
