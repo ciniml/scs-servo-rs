@@ -244,6 +244,7 @@ impl<const BUFFER_SIZE: usize> ProtocolReader<BUFFER_SIZE> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ProtocolMasterConfig {
     // The underlying reader receives command from this master.
     pub echo_back: bool,
@@ -330,6 +331,13 @@ impl<const SIZE: usize> WriteRegisterCommand<SIZE> {
     }
     pub fn writer(&mut self) -> PacketWriter {
         PacketWriter::new(&mut self.raw[2..])
+    }
+    pub fn body_mut(&mut self) -> &mut [u8] {
+        let len = self.len();
+        &mut self.raw[6..len - 1]
+    }
+    pub fn update_checksum(&mut self) -> Result<(), PacketError> {
+        self.writer().update_checksum()
     }
 }
 
@@ -688,7 +696,7 @@ mod test {
     #[test]
     fn test_protocol_reader() {
         let mut reader = ProtocolReader::<8>::new();
-        let mut raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
+        let raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
         let mut stream = Cursor::new(raw);
         let mut stream = StreamWrapper::new(&mut stream);
 
@@ -704,7 +712,7 @@ mod test {
     #[test]
     fn test_protocol_reader_insuffucient_buffer() {
         let mut reader = ProtocolReader::<5>::new();
-        let mut raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
+        let raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
         let mut stream = Cursor::new(raw);
         let mut stream = StreamWrapper::new(&mut stream);
 
@@ -718,8 +726,7 @@ mod test {
     #[test]
     fn test_protocol_reader_two_phase() {
         let mut reader = ProtocolReader::<8>::new();
-        let mut buffer = [0; 8];
-        let mut raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
+        let raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
         let mut stream = Cursor::new(&raw[0..4]);
         let mut stream = StreamWrapper::new(&mut stream);
 
@@ -741,8 +748,7 @@ mod test {
     #[test]
     fn test_protocol_reader_garbages() {
         let mut reader = ProtocolReader::<8>::new();
-        let mut buffer = [0; 8];
-        let mut raw = [0x01, 0xff, 0x00, 0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
+        let raw = [0x01, 0xff, 0x00, 0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
         let mut stream = Cursor::new(&raw);
         let mut stream = StreamWrapper::new(&mut stream);
 
@@ -758,8 +764,7 @@ mod test {
     #[test]
     fn test_protocol_reader_two_packets() {
         let mut reader = ProtocolReader::<8>::new();
-        let mut buffer = [0; 8];
-        let mut raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8, 0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
+        let raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8, 0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
         let mut stream = Cursor::new(&raw);
         let mut stream = StreamWrapper::new(&mut stream);
 
@@ -785,8 +790,7 @@ mod test {
     #[test]
     fn test_protocol_reader_two_packets_with_garbage() {
         let mut reader = ProtocolReader::<8>::new();
-        let mut buffer = [0; 8];
-        let mut raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8, 0x00, 0xff, 0x01, 0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
+        let raw = [0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8, 0x00, 0xff, 0x01, 0xff, 0xff, 0x01, 0x05, 0x03, 0x2a, 0x00, 0x14, 0xb8];
         let mut stream = Cursor::new(&raw);
         let mut stream = StreamWrapper::new(&mut stream);
 
@@ -818,6 +822,10 @@ mod test {
         let (mut slave_writer, mut master_reader) = std::sync::mpsc::channel();
 
         std::thread::spawn(move || {
+            let mut register_storage = [0u8; 256];
+            for i in 0..256 {
+                register_storage[i] = i as u8;
+            }
             loop {
                 match slave.process(&mut slave_reader, &mut slave_writer, |packet, buffer| {
                     std::println!("Received packet: {:?}", packet.id().unwrap());
@@ -833,10 +841,19 @@ mod test {
                             writer.set_length(1 + length + 1).ok();
                             writer.data_mut().unwrap()[0] = 0;  // fixed
                             for i in 0..length {
-                                writer.data_mut().unwrap()[i as usize + 1] = start + i;
+                                writer.data_mut().unwrap()[i as usize + 1] = register_storage[(start + i) as usize];
                             }
                             writer.update_checksum().unwrap();
                             Some(2 + 1 + length as usize + 3)
+                        } else if data[0] == Command::WriteRegister as u8 {
+                            let start = data[1] as usize;
+                            let body = &data[2..];
+                            let count = body.len();
+                            register_storage[start..start+count].copy_from_slice(body);
+                            writer.set_length(2).ok();
+                            writer.data_mut().unwrap()[0] = 0;  // fixed
+                            writer.update_checksum().unwrap();
+                            Some(2 + 1 + 3)
                         } else {
                             None
                         }
@@ -862,5 +879,16 @@ mod test {
         let result = master.read_register(&mut master_reader, &mut master_writer, 0x01, 0x20, &mut buffer, || std::time::Instant::now() - start_time > std::time::Duration::from_secs(1));
         assert!(result.is_ok(), "Error: {:?}", result);
         assert_eq!(buffer, [0x20, 0x21, 0x22, 0x23]);
+
+        let mut command = WriteRegisterCommand::<16>::new(0x01, 0x20, 4);
+        command.body_mut().copy_from_slice(&[0x30, 0x31, 0x32, 0x33]);
+        command.update_checksum().unwrap();
+        let result = master.write_register(&mut master_reader, &mut master_writer, &command, || std::time::Instant::now() - start_time > std::time::Duration::from_secs(1));
+        assert!(result.is_ok(), "Error: {:?}", result);
+        
+        let result = master.read_register(&mut master_reader, &mut master_writer, 0x01, 0x20, &mut buffer, || std::time::Instant::now() - start_time > std::time::Duration::from_secs(1));
+        assert!(result.is_ok(), "Error: {:?}", result);
+        assert_eq!(buffer, [0x30, 0x31, 0x32, 0x33]);
+
     }
 }
