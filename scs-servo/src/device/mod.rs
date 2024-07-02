@@ -57,6 +57,12 @@ pub trait ServoControl {
     type Speed;
     type Torque;
 
+    fn min_speed(&self) -> Self::Speed;
+    fn max_speed(&self) -> Self::Speed;
+    fn max_period(&self) -> Self::Period;
+    fn to_speed(&self, speed: f64) -> Result<Self::Speed, Self::Error>;
+    fn to_period(&self, period: f64) -> Result<Self::Period, Self::Error>;
+
     fn id(&self) -> Self::Id;
     fn set_id(&mut self, id: Self::Id) -> Result<(), Self::Error>;
 
@@ -71,6 +77,10 @@ pub trait ServoControl {
     fn target_period(&mut self) -> Result<Self::Period, Self::Error>;
     fn set_target_period(&mut self, period: Self::Period) -> Result<(), Self::Error>;
 
+    fn target_speed(&mut self) -> Result<Self::Speed, Self::Error>;
+    fn set_target_speed(&mut self, speed: Self::Speed) -> Result<(), Self::Error>;
+
+    
     fn current_position(&mut self) -> Result<Self::Position, Self::Error>;
     fn current_speed(&mut self) -> Result<Self::Speed, Self::Error>;
     fn current_load(&mut self) -> Result<Self::Torque, Self::Error>;
@@ -109,6 +119,7 @@ impl Timer for std::time::Instant {
 #[derive(Debug)]
 pub enum Error<ProtocolHandlerError> {
     ProtocolError(ProtocolHandlerError),
+    InvalidArgument,
     NotUpdated,
 }
 

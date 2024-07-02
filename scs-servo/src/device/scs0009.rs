@@ -98,8 +98,13 @@ impl CurrentValues {
     fn position(&self) -> u16 {
         u16::from_be_bytes([self.buffer[0], self.buffer[1]])
     }
-    fn speed(&self) -> u16 {
-        u16::from_be_bytes([self.buffer[2], self.buffer[3]])
+    fn speed(&self) -> i16 {
+        let speed = u16::from_be_bytes([self.buffer[2], self.buffer[3]]);
+        if speed >= 32768 {
+            -((speed - 32768) as i16)
+        } else {
+            speed as i16
+        }
     }
     fn load(&self) -> u16 {
         u16::from_be_bytes([self.buffer[4], self.buffer[5]])
@@ -178,7 +183,7 @@ impl<R, W, Timer> super::ServoControl for Scs0009ServoControl<R, W, Timer>
     type Id = u8;
     type Position = u16;
     type Period = u16;
-    type Speed = u16;
+    type Speed = i16;
     type Torque = u16;
     
     fn id(&self) -> Self::Id {
@@ -225,6 +230,14 @@ impl<R, W, Timer> super::ServoControl for Scs0009ServoControl<R, W, Timer>
         Ok(self.write_register_u16(REGISTER_TARGET_PERIOD_H.address, period)?)
     }
 
+    fn target_speed(&mut self) -> Result<Self::Speed, Self::Error> {
+        Ok(self.read_register_u16(REGISTER_TARGET_SPEED_H.address)? as i16)
+    }
+
+    fn set_target_speed(&mut self, speed: Self::Speed) -> Result<(), Self::Error> {
+        Ok(self.write_register_u16(REGISTER_TARGET_SPEED_H.address, speed as u16)?)
+    }
+
     fn current_position(&mut self) -> Result<Self::Position, Self::Error> {
         if let Some(values) = self.current_values.borrow() {
             Ok(values.position())
@@ -254,6 +267,32 @@ impl<R, W, Timer> super::ServoControl for Scs0009ServoControl<R, W, Timer>
         self.read_continuous_registers(REGISTER_CURRENT_POSITION_H.address, &mut values.buffer)?;
         self.current_values = Some(values);
         Ok(())
+    }
+
+    fn min_speed(&self) -> Self::Speed {
+        0
+    }
+    fn max_speed(&self) -> Self::Speed {
+        0x7fff
+    }
+    fn max_period(&self) -> Self::Period {
+        0xffff
+    }
+    fn to_speed(&self, speed: f64) -> Result<Self::Speed, Self::Error> {
+        let speed = speed / 0.19;
+        if speed < 0.0 || speed > 65535.0 {
+            Err(Error::InvalidArgument)
+        } else {
+            Ok(speed as Self::Speed)
+        }
+    }
+    fn to_period(&self, period: f64) -> Result<Self::Period, Self::Error> {
+        if period < 0.0 || period > 65.535 {
+            Err(Error::InvalidArgument)
+        } else {
+            Ok((period * 1000.0) as Self::Period)
+        }
+        
     }
 
 }
