@@ -14,4 +14,4 @@ indicatif = "0.17.8"
 log = { version = "0.4.21", features = ["std"] }
 nb = "1.1.0"
 scs-servo = { path = "../scs-servo", features = ["std"] }
-serialport = "4.3.0"
+serialport = { version = "4.3.0", default-features = false}

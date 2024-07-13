@@ -274,7 +274,7 @@ fn main() {
         }
         SubCommands::Control { id, model, control } => {
             let _model = model; // Currently unused.
-            let mut servo_control = Scs0009ServoControl::<_, _, std::time::Instant>::new(id, reader, writer, ProtocolMasterConfig { echo_back: false }, std::time::Duration::from_secs(2));
+            let mut servo_control = Scs0009ServoControl::<_, _, std::time::Instant>::new(id, reader, writer, ProtocolMasterConfig { echo_back: cli.echo }, std::time::Duration::from_secs(2));
             match control {
                 Control::SetId { new_id } => {
                     servo_control.set_id(new_id).expect("Failed to set ID");
