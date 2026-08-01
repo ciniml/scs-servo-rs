@@ -82,6 +82,7 @@ pub struct Scs0009ServoControl<R, W, Timer> {
     writer: W,
     master_config: ProtocolMasterConfig,
     timeout: Duration,
+    wait_write_response: bool,
     current_values: Option<CurrentValues>,
     timer: PhantomData<Timer>,
 }
@@ -127,9 +128,19 @@ impl<R, W, Timer> Scs0009ServoControl<R, W, Timer> {
             writer,
             master_config,
             timeout,
+            wait_write_response: true,
             current_values: None,
             timer: PhantomData,
         }
+    }
+
+    /// Configure whether write commands wait for a status reply (default: `true`).
+    ///
+    /// Set to `false` for servos whose response level is reply-to-read-only; otherwise
+    /// every write blocks until the response timeout expires.
+    pub fn with_wait_write_response(mut self, wait: bool) -> Self {
+        self.wait_write_response = wait;
+        self
     }
 }
 
@@ -152,7 +163,11 @@ impl<R, W, Timer> Scs0009ServoControl<R, W, Timer>
         command.writer().data_mut().unwrap()[2..2+data.len()].copy_from_slice(data);
         command.update_checksum().unwrap();
         let start = Timer::now();
-        master.write_register(&mut self.reader, &mut self.writer, &command, || start.elapsed() >= self.timeout)?;
+        if self.wait_write_response {
+            master.write_register(&mut self.reader, &mut self.writer, &command, || start.elapsed() >= self.timeout)?;
+        } else {
+            master.write_register_no_response(&mut self.reader, &mut self.writer, &command, || start.elapsed() >= self.timeout)?;
+        }
         Ok(())
     }
     #[allow(dead_code)]

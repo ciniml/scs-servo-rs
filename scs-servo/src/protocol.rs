@@ -487,6 +487,43 @@ impl<const BUFFER_SIZE: usize> ProtocolMaster<BUFFER_SIZE> {
         Ok(())
     }
 
+    /// Send a write command without waiting for a status reply.
+    ///
+    /// Use this when the servo's response level is configured to reply only to READ/PING
+    /// commands — with such servos, waiting for a write acknowledgement always times out.
+    /// The echo-backed packet (half-duplex wiring) is still drained when `echo_back` is set.
+    pub fn write_register_no_response<R: StreamReader, W: StreamWriter, Timeout: FnMut() -> bool, const SIZE: usize>(&mut self, reader: &mut R, writer: &mut W, command: &WriteRegisterCommand<SIZE>, mut timeout: Timeout) -> Result<(), ProtocolHandlerError<R::Error, W::Error>> {
+        let buffer = command.packet();
+        let mut total_bytes_written = 0;
+        while total_bytes_written < buffer.len() {
+            match writer.write(&buffer[total_bytes_written..]) {
+                Ok(bytes_written) => {
+                    total_bytes_written += bytes_written;
+                }
+                Err(nb::Error::WouldBlock) => {
+                    // TODO: wait for writer to be ready
+                }
+                Err(nb::Error::Other(err)) => {
+                    return Err(ProtocolHandlerError::WriterError(err));
+                }
+            }
+            if timeout() {
+                return Err(ProtocolHandlerError::TimedOut);
+            }
+        }
+
+        if self.config.echo_back {
+            // Discard echo backed packet.
+            while !self.reader.read(reader)? {
+                if timeout() {
+                    return Err(ProtocolHandlerError::TimedOut);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     #[cfg(feature = "async")]
     pub async fn write_register_async<R: StreamReaderAsync, W: StreamWriterAsync, Timeout: FnMut() -> bool, const SIZE: usize>(&mut self, reader: &mut R, writer: &mut W, command: &WriteRegisterCommand<SIZE>, mut timeout: Timeout) -> Result<(), ProtocolHandlerError<R::Error, W::Error>> {
         let buffer = command.packet();
